@@ -32,7 +32,7 @@ public class Jar2pom {
     public static final String nexusUrl = "http://maven.aliyun.com/nexus/service/local/lucene/search";
 
     public static void main(String[] args) {
-
+        //先通过Jar的SHA1查询 如果不存在则解析Manifest查询
         File libs = new File("D:\\lib");
         for (File jar : libs.listFiles()) {
             System.out.println("<!--  " + jar.getName() + " -->");
