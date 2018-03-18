@@ -16,6 +16,7 @@ import java.io.FileInputStream;
 import java.io.IOException;
 import java.math.BigInteger;
 import java.security.MessageDigest;
+import java.util.jar.*;
 
 /**
  * 通过Jar包SHA1或MD5生成Pom文件
@@ -28,7 +29,7 @@ public class Jar2pom {
     /**
      * Maven库
      */
-    public static final String nexusUrl = "http://maven.aliyun.com/nexus/service/local/lucene/search?sha1=";
+    public static final String nexusUrl = "http://maven.aliyun.com/nexus/service/local/lucene/search";
 
     public static void main(String[] args) {
 
@@ -36,8 +37,11 @@ public class Jar2pom {
         for (File jar : libs.listFiles()) {
             System.out.println("<!--  " + jar.getName() + " -->");
             if (!getPomByChecksum(jar).isTextOnly()) {
-                System.out.println("<!--  Search by checksum -->");
+                System.out.println("<!--  Search by Checksum -->");
                 System.out.println(getPomByChecksum(jar).asXML());
+            } else if (!getPomByManifest(jar).isTextOnly()) {
+                System.out.println("<!--  Search by Manifest -->");
+                System.out.println(getPomByManifest(jar).asXML());
             } else {
                 System.out.println("<!--  No data was found -->");
             }
@@ -47,15 +51,69 @@ public class Jar2pom {
     }
 
     /**
-     * 通过文件返回Pom
+     * 通过Jar SHA1返回Pom dependency
      *
      * @param file
      * @return
      */
     public static Element getPomByChecksum(File file) {
-        Element dependency = new DOMElement("dependency");
         String checkSum = getCheckSum(file, "SHA1");
-        String xml = doGet(nexusUrl + checkSum);
+        String xml = doGet(nexusUrl + "?sha1=" + checkSum);
+        return assemblePomElement(xml);
+    }
+
+    /**
+     * 通过Jar Manifest返回Pom dependency
+     *
+     * @param file
+     * @return
+     */
+    public static Element getPomByManifest(File file) {
+        try {
+            JarFile jarfile = new JarFile(file);
+            Manifest mainmanifest = jarfile.getManifest();
+            jarfile.close();
+            if (null == mainmanifest) {
+                return new DOMElement("dependency");
+            }
+            String a = null, v = null;
+            if (mainmanifest.getMainAttributes().containsKey(new Attributes.Name("Extension-Name"))) {
+                a = mainmanifest.getMainAttributes().getValue(new Attributes.Name("Extension-Name"));
+            } else if (mainmanifest.getMainAttributes().containsKey(new Attributes.Name("Implementation-Title"))) {
+                a = mainmanifest.getMainAttributes().getValue(new Attributes.Name("Implementation-Title"));
+            } else if (mainmanifest.getMainAttributes().containsKey(new Attributes.Name("Specification-Title"))) {
+                a = mainmanifest.getMainAttributes().getValue(new Attributes.Name("Specification-Title"));
+            }
+            if (a != null && a.length() != 0) {
+                a = a.replace("\"", "").replace(" ", "-");
+            }
+            if (mainmanifest.getMainAttributes().containsKey(new Attributes.Name("Bundle-Version"))) {
+                v = mainmanifest.getMainAttributes().getValue(new Attributes.Name("Bundle-Version"));
+            } else if (mainmanifest.getMainAttributes().containsKey(new Attributes.Name("Implementation-Version"))) {
+                v = mainmanifest.getMainAttributes().getValue(new Attributes.Name("Implementation-Version"));
+            } else if (mainmanifest.getMainAttributes().containsKey(new Attributes.Name("Specification-Version"))) {
+                v = mainmanifest.getMainAttributes().getValue(new Attributes.Name("Specification-Version"));
+            }
+            if (v != null && v.length() != 0) {
+                v = v.replace("\"", "").replace(" ", "-");
+            }
+            String xml = doGet(nexusUrl + "?a=" + a + "&v=" + v);
+            return assemblePomElement(xml);
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+        return new DOMElement("dependency");
+    }
+
+    /**
+     * 解析获取的XML 组装dependency
+     *
+     * @param xml
+     * @return
+     */
+    public static Element assemblePomElement(String xml) {
+        Element dependency = new DOMElement("dependency");
+
         if (xml != null && xml.length() != 0) {
             try {
                 Document document = DocumentHelper.parseText(xml);
