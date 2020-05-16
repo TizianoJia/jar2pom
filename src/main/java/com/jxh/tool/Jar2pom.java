@@ -1,13 +1,13 @@
 package com.jxh.tool;
 
+import com.alibaba.fastjson.JSONObject;
+import com.jxh.tool.entity.Docs;
+import com.jxh.tool.entity.SolrSearch;
 import org.apache.http.HttpResponse;
 import org.apache.http.client.methods.HttpGet;
 import org.apache.http.impl.client.CloseableHttpClient;
 import org.apache.http.impl.client.HttpClients;
 import org.apache.http.util.EntityUtils;
-import org.dom4j.Document;
-import org.dom4j.DocumentException;
-import org.dom4j.DocumentHelper;
 import org.dom4j.Element;
 import org.dom4j.dom.DOMElement;
 
@@ -16,35 +16,46 @@ import java.io.FileInputStream;
 import java.io.IOException;
 import java.math.BigInteger;
 import java.security.MessageDigest;
-import java.util.jar.*;
+import java.util.jar.Attributes;
+import java.util.jar.JarFile;
+import java.util.jar.Manifest;
 
 /**
  * 通过Jar包SHA1或MD5生成Pom文件
  *
  * @author JiaXiaohei
- * @date 2018-03-16
+ * @date 2020-05-16
  */
 public class Jar2pom {
 
     /**
      * Maven库
      */
-    public static final String nexusUrl = "http://59.110.144.164/nexus/service/local/lucene/search";
+    public static final String nexusUrl = "https://search.maven.org/solrsearch/select?start=0&rows=1";
 
     public static void main(String[] args) {
         //先通过Jar的SHA1查询 如果不存在则解析Manifest查询
         File libs = new File("D:\\lib");
         for (File jar : libs.listFiles()) {
+
             System.out.println("<!--  " + jar.getName() + " -->");
-            if (!getPomByChecksum(jar).isTextOnly()) {
+
+            Docs doc = getPomByChecksum(jar);
+            if (null != doc) {
                 System.out.println("<!--  Search by Checksum -->");
-                System.out.println(getPomByChecksum(jar).asXML());
-            } else if (!getPomByManifest(jar).isTextOnly()) {
-                System.out.println("<!--  Search by Manifest -->");
-                System.out.println(getPomByManifest(jar).asXML());
-            } else {
-                System.out.println("<!--  No data was found -->");
+                System.out.println(assemblePomElement(doc).asXML());
+                continue;
             }
+
+            doc = getPomByManifest(jar);
+            if (null != doc) {
+                System.out.println("<!--  Search by Manifest -->");
+                System.out.println(assemblePomElement(doc).asXML());
+                continue;
+            }
+
+            System.out.println("<!--  No data was found -->");
+
             System.out.println();
         }
 
@@ -56,11 +67,19 @@ public class Jar2pom {
      * @param file
      * @return
      */
-    public static Element getPomByChecksum(File file) {
+    public static Docs getPomByChecksum(File file) {
+        Docs docs = null;
+
         String checkSum = getCheckSum(file, "SHA1");
-        String xml = doGet(nexusUrl + "?sha1=" + checkSum);
-        return assemblePomElement(xml);
+        String jsonString = doGet(nexusUrl + "&q=1:" + checkSum);
+        SolrSearch solrSearch = JSONObject.parseObject(jsonString, SolrSearch.class);
+
+        if (solrSearch.getResponseHeader().getStatus() == 0 && solrSearch.getResponse().getDocs().size() > 0) {
+            docs = solrSearch.getResponse().getDocs().get(0);
+        }
+        return docs;
     }
+
 
     /**
      * 通过Jar Manifest返回Pom dependency
@@ -68,13 +87,15 @@ public class Jar2pom {
      * @param file
      * @return
      */
-    public static Element getPomByManifest(File file) {
+    public static Docs getPomByManifest(File file) {
+        Docs docs = null;
+
         try {
             JarFile jarfile = new JarFile(file);
             Manifest mainmanifest = jarfile.getManifest();
             jarfile.close();
             if (null == mainmanifest) {
-                return new DOMElement("dependency");
+                return null;
             }
             String a = null, v = null;
             if (mainmanifest.getMainAttributes().containsKey(new Attributes.Name("Extension-Name"))) {
@@ -97,36 +118,30 @@ public class Jar2pom {
             if (v != null && v.length() != 0) {
                 v = v.replace("\"", "").replace(" ", "-");
             }
-            String xml = doGet(nexusUrl + "?a=" + a + "&v=" + v);
-            return assemblePomElement(xml);
+            String jsonString = doGet(nexusUrl + "&q=a:" + a + "%20v:" + v);
+            SolrSearch solrSearch = JSONObject.parseObject(jsonString, SolrSearch.class);
+
+            if (solrSearch.getResponseHeader().getStatus() == 0) {
+                docs = solrSearch.getResponse().getDocs().get(0);
+            }
         } catch (IOException e) {
             e.printStackTrace();
         }
-        return new DOMElement("dependency");
+        return docs;
     }
 
     /**
-     * 解析获取的XML 组装dependency
+     * 组装 dependency
      *
-     * @param xml
+     * @param docs
      * @return
      */
-    public static Element assemblePomElement(String xml) {
+    public static Element assemblePomElement(Docs docs) {
         Element dependency = new DOMElement("dependency");
-
-        if (xml != null && xml.length() != 0) {
-            try {
-                Document document = DocumentHelper.parseText(xml);
-                Element dataElement = document.getRootElement().element("data");
-                if (dataElement.getText() != null && dataElement.getText().length() != 0) {
-                    Element artifactElement = dataElement.element("artifact");
-                    dependency.add((Element) artifactElement.element("groupId").clone());
-                    dependency.add((Element) artifactElement.element("artifactId").clone());
-                    dependency.add((Element) artifactElement.element("version").clone());
-                }
-            } catch (DocumentException e) {
-                e.printStackTrace();
-            }
+        if (docs != null) {
+            dependency.addAttribute("groupId", docs.getG());
+            dependency.addAttribute("artifactId", docs.getA());
+            dependency.addAttribute("version", docs.getV());
         }
         return dependency;
     }
